@@ -1,0 +1,253 @@
+---
+title: "Heart Disease Support Vector Machine"
+author: "Lucas Mendicino"
+date: "11/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Support Vector Machine
+
+
+# Load Packages
+```{r}
+library(tidyverse)
+library(caret)
+library(e1071)
+```
+
+# Prepare the Data
+
+Let's load the data
+```{r}
+# Read datasets Cleveland_hd.csv into hd_data
+hd <- read.csv("~/Desktop/UCI-Heart-Disease-Prediction/heart.csv")
+```
+
+Let's look at the structure and a few rows
+```{r}
+str(hd)
+head(hd)
+```
+                                            
+The variables include:
+
+- age: age in years
+- sex: (1 = male; 0 = female)
+- cp: chest pain type (typical angina, atypical angina, non-anginal pain, or asymptomatic angina)
+- trestbps: resting blood pressure (in mm Hg on admission to the hospital)
+- chol: serum cholestoral in mg/dl
+- fbs: Fasting blood sugar (< 120 mg/dl or > 120 mg/dl) (1 = true; 0 = false)
+- restecg: resting electrocardiographic results (normal, ST-T wave abnormality, or left ventricular hypertrophy)
+- thalach: Max. heart rate achieved during thalium stress test
+- exang: Exercise induced angina (1 = yes; 0 = no)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: Slope of peak exercise ST segment (0 = upsloping, 1 = flat, or 2 = downsloping)
+- ca: number of major vessels (0-3) colored by flourosopy 4 = NA
+- thal: Thalium stress test result 3 = normal; 6 = fixed defect; 7 = reversable defect 0 = NA
+- target: Heart disease status 1 or 0 (0 = heart disease 1 = asymptomatic)
+
+It is important to note that for the target variable, 0 is assigned to heart disease and 1 is asymptomatic. Let's recode this.
+
+
+```{r}
+hd_new <- hd %>% mutate(target = recode(target, "0" = "1", "1" = "0"))
+```
+
+
+Let's tidy the dataset a bit more.
+
+```{r}
+hd_model <- hd_new %>%
+  filter(
+    thal != 0 & ca != 4 # remove values correspondind to NA in original dataset
+  ) %>%
+# Recode the categorical variables as factors using the dplyr library.
+  mutate(
+    sex = case_when(
+      sex == 0 ~ "female",
+      sex == 1 ~ "male"
+           ),
+    fbs = case_when(
+      fbs == 0 ~ "<=120",
+      fbs == 1 ~ ">120"
+            ),
+    exang = case_when(
+      exang == 0 ~ "no",
+      exang == 1 ~ "yes"
+            ),
+    cp = case_when(
+      cp == 3 ~ "typical angina",
+      cp == 1 ~ "atypical angina",
+      cp == 2 ~ "non-anginal pain",
+      cp == 0 ~ "asymptomatic angina"
+          ),
+    restecg = case_when(
+      restecg == 0 ~ "hypertrophy",
+      restecg == 1 ~ "normal",
+      restecg == 2 ~ "wave abnormality"
+              ),
+    target = case_when(
+      target == 0 ~ "asymptomatic",
+      target == 1 ~ "heart-disease"
+              ),
+    slope = case_when(
+      slope == 2 ~ "upsloping",
+      slope == 1 ~ "flat",
+      slope == 0 ~ "downsloping"
+    ),
+    thal = case_when(
+      thal == 1 ~ "fixed defect",
+      thal == 2 ~ "normal",
+      thal == 3 ~ "reversable defect"
+    ),
+    sex = as.factor(sex),
+    fbs = as.factor(fbs),
+    exang = as.factor(exang),
+    cp = as.factor(cp),
+    slope = as.factor(slope),
+    ca = as.factor(ca),
+    thal = as.factor(thal),
+    restecg = as.factor(restecg),
+    target = as.factor(target)
+  )
+
+```
+
+
+
+## Training and Test sets
+
+
+
+```{r}
+hd_model_svm <- na.omit(hd_new)
+
+missing_ca_indeces <- which(hd_model_svm$ca %in% 4)
+missing_thal_indeces <-which(hd_model_svm$thal %in% 0)
+restecg_indices <-which(hd_model_svm$restecg %in% 2)
+missing_values_indeces <- c(missing_ca_indeces, missing_thal_indeces, restecg_indices)
+hd_model_svm <- hd_model_svm[-missing_values_indeces, ]
+
+hd_model_svm <- hd_model_svm %>% mutate(target = as.integer(target))
+set.seed(44)
+train.samples <- hd_model_svm$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data <- hd_model_svm[train.samples, ]
+test_data <- hd_model_svm[-train.samples, ]
+```
+
+
+
+Let's scale the numeric variables and 1-hot encode the categorical ones
+
+
+```{r}
+train_data_svm <- train_data
+test_data_svm <- test_data
+
+train_data_svm <- train_data_svm %>% mutate(cp = as.factor(cp), restecg = as.factor(restecg),
+                                            exang = as.factor(exang), slope = as.factor(slope),
+                                            ca = as.factor(ca), thal = as.factor(thal))
+
+test_data_svm <- test_data_svm %>% mutate(cp = as.factor(cp), restecg = as.factor(restecg),
+                                            exang = as.factor(exang), slope = as.factor(slope),
+                                            ca = as.factor(ca), thal = as.factor(thal))
+
+
+train_data_svm[, c(1,4,5,8,10)] = scale(train_data_svm[, c(1,4,5,8,10)])
+test_data_svm[, c(1,4,5,8,10)] = scale(test_data_svm[, c(1,4,5,8,10)])
+
+dummy_train <- dummyVars(" ~ .", data = train_data_svm)
+dummy_test <- dummyVars(" ~ .", data = test_data_svm)
+
+train_data_svm <- data.frame(predict(dummy_train, newdata = train_data_svm))
+test_data_svm <- data.frame(predict(dummy_test, newdata = test_data_svm))
+
+train_data_svm$target <- as.factor(train_data_svm$target)
+test_data_svm$target <- as.factor(test_data_svm$target)
+```
+
+
+
+
+
+
+```{r}
+train_control_svm <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+svm_lin <- train(target ~ ., data = train_data_svm, method = "svmLinear", 
+                 trControl = train_control_svm, tuneLength = 10)
+
+svm_lin
+```
+
+```{r}
+
+pred_svm <- predict(svm_lin, train_data_svm)
+
+confusionMatrix(table(pred_svm, train_data_svm$target), positive = "1")
+  
+```
+
+```{r}
+grid_lin <- expand.grid(C = c(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2,5))
+
+svm_lin_grid<- train(target ~., data = train_data_svm, method = "svmLinear", trControl = train_control_svm,
+                     tuneGrid = grid_lin, tuneLength = 10)
+svm_lin_grid
+plot(svm_lin_grid)
+```
+
+
+
+```{r}
+pred_svm_lin_grid <- predict(svm_lin_grid, newdata = test_data_svm)
+
+confusionMatrix(pred_svm_lin_grid, test_data_svm$target, positive = "1")
+```
+
+
+
+Radial
+```{r}
+svm_rad <- train(target ~ ., data = train_data_svm, method = "svmRadial", scale = FALSE,
+                 trControl = train_control_svm, tuneLength = 10)
+
+svm_rad
+plot(svm_rad)
+```
+
+```{r}
+
+pred_rad <- predict(svm_rad, train_data_svm)
+
+confusionMatrix(table(pred_rad, train_data_svm$target))
+  
+```
+
+```{r}
+grid_rad <- expand.grid(sigma = c(0, 0.001, 0.01, 0.02, 0.1, 0.25, 0.5, 0.75,0.9),
+ C = c(0.01, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1))
+
+svm_rad_grid<- train(target ~., data = train_data_svm, method = "svmRadial", scale = FALSE, trControl = train_control_svm,
+                     tuneGrid = grid_rad, tuneLength = 10)
+svm_rad_grid
+```
+
+
+```{r}
+plot(svm_rad_grid)
+```
+
+
+```{r}
+pred_svm_rad_grid <- predict(svm_rad_grid, newdata = test_data_svm)
+
+confusionMatrix(pred_svm_rad_grid, test_data_svm$target, positive = "1")
+```

@@ -1,0 +1,1120 @@
+---
+title: "UCI Heart Disease Prediction"
+author: "Lucas Mendicino"
+date: "11/21/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Packages
+```{r}
+#EDA
+library(tidyverse) 
+library(DataExplorer)
+library(gtsummary)
+library(ggsci)
+theme_gtsummary_journal(journal = "jama")
+library(caret)
+# Penalized Regression
+library(glmnet)
+# Random Forest
+library(randomForest)
+# Support Vector Machine
+library(e1071)
+# PCA
+library(PCAmixdata)
+library(factoextra)
+library(kernlab)
+library(mltools)
+library(varhandle)
+library(data.table)
+```
+
+In this project, I will be using the Heart Disease dataset from the UC Irvine Machine Learning Repository. The dataset contains 14 features.
+
+# Outline
+
+1. Prepare the Data
+2. Exploratory Data Analysis
+3. Modeling
+- Clustering (Principle Component Analysis, Hierarchical Clustering Analysis, K-Means)
+- Logistic Regression
+- Random Forest
+- SVM
+- 
+
+# Prepare the Data
+
+Let's load the data
+```{r}
+# Read datasets Cleveland_hd.csv into hd_data
+hd <- read.csv("~/Desktop/UCI-Heart-Disease-Prediction/heart.csv")
+```
+
+Let's look at the structure and a few rows
+```{r}
+str(hd)
+head(hd)
+```
+                                            
+The variables include:
+
+- age: age in years
+- sex: (1 = male; 0 = female)
+- cp: chest pain type (typical angina, atypical angina, non-anginal pain, or asymptomatic angina)
+- trestbps: resting blood pressure (in mm Hg on admission to the hospital)
+- chol: serum cholestoral in mg/dl
+- fbs: Fasting blood sugar (< 120 mg/dl or > 120 mg/dl) (1 = true; 0 = false)
+- restecg: resting electrocardiographic results (normal, ST-T wave abnormality, or left ventricular hypertrophy)
+- thalach: Max. heart rate achieved during thalium stress test
+- exang: Exercise induced angina (1 = yes; 0 = no)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: Slope of peak exercise ST segment (0 = upsloping, 1 = flat, or 2 = downsloping)
+- ca: number of major vessels (0-3) colored by flourosopy 4 = NA
+- thal: Thalium stress test result 3 = normal; 6 = fixed defect; 7 = reversable defect 0 = NA
+- target: Heart disease status 1 or 0 (0 = heart disease 1 = asymptomatic)
+
+It is important to note that for the target variable, 0 is assigned to heart disease and 1 is asymptomatic. Let's recode this.
+
+```{r}
+hd_new <- hd %>% mutate(target = recode(target, "0" = "1", "1" = "0"))
+```
+
+Let's tidy the dataset a bit more.
+
+
+```{r}
+hd2 <- hd_new %>%
+  filter(
+    thal != 0 & ca != 4 # remove values correspondind to NA in original dataset
+  ) %>%
+# Recode the categorical variables as factors using the dplyr library.
+  mutate(
+    sex = case_when(
+      sex == 0 ~ "female",
+      sex == 1 ~ "male"
+           ),
+    fbs = case_when(
+      fbs == 0 ~ "<=120",
+      fbs == 1 ~ ">120"
+            ),
+    exang = case_when(
+      exang == 0 ~ "no",
+      exang == 1 ~ "yes"
+            ),
+    cp = case_when(
+      cp == 3 ~ "typical angina",
+      cp == 1 ~ "atypical angina",
+      cp == 2 ~ "non-anginal pain",
+      cp == 0 ~ "asymptomatic angina"
+          ),
+    restecg = case_when(
+      restecg == 0 ~ "hypertrophy",
+      restecg == 1 ~ "normal",
+      restecg == 2 ~ "wave abnormality"
+              ),
+    target = case_when(
+      target == 0 ~ "asymptomatic",
+      target == 1 ~ "heart-disease"
+              ),
+    slope = case_when(
+      slope == 2 ~ "upsloping",
+      slope == 1 ~ "flat",
+      slope == 0 ~ "downsloping"
+    ),
+    thal = case_when(
+      thal == 1 ~ "fixed defect",
+      thal == 2 ~ "normal",
+      thal == 3 ~ "reversable defect"
+    ),
+    sex = as.factor(sex),
+    fbs = as.factor(fbs),
+    exang = as.factor(exang),
+    cp = as.factor(cp),
+    slope = as.factor(slope),
+    ca = as.factor(ca),
+    thal = as.factor(thal),
+    restecg = as.factor(restecg),
+    target = as.factor(target)
+  )
+
+hd_EDA <- hd2
+hd_model <- hd2
+
+```
+
+
+# Exploratory Data Analysis
+
+Let's check out missing values
+```{r}
+plot_missing(hd_EDA)
+```
+The dataset is complete with no missing values.
+
+Let's get summary statistics:
+
+```{r, message = FALSE}
+hd_EDA %>% tbl_summary(statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p}%)"),
+                    digits = all_continuous() ~ 2)
+```
+
+
+### Target: Whether patient has heart disease or not
+
+```{r}
+hd_EDA %>% group_by(target) %>% count()
+
+ggplot(hd_EDA, aes(target, fill = target)) + geom_bar() + xlab("Disease Status") + ylab("Number of Patients")+ scale_color_jama()
+```
+### Age: age in years
+
+```{r}
+hd_EDA %>% summarise(Mean_Age = mean(age), Median_Age = median(age), SD_age = sd(age))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_Age = mean(age), Median_Age = median(age), SD_age = sd(age))
+```
+
+```{r}
+ggplot(hd_EDA, aes(age, fill = target)) + geom_histogram(binwidth = 1) + labs(fill = "Disease Status", x = "Age", y = "Number of Patients") + facet_grid(~target) + scale_color_jama()
+```
+
+Does age have an effect? Let's use a t-test
+```{r}
+hd_age <- t.test(hd_EDA$age ~ hd_EDA$target)
+print(hd_age)
+```
+
+```{r}
+ggplot(data = hd_EDA, aes(x = target, y = age)) + geom_boxplot() + xlab("Heart Disease Diagnosis")
+```
+
+### Sex: Patient Sex
+
+```{r}
+hd_EDA %>% group_by(sex) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, sex) %>% count() 
+```
+
+Does sex have an effect? Let's use a chi-squared test
+```{r}
+hd_sex <- chisq.test(hd_EDA$sex, hd_EDA$target)
+print(hd_sex)
+```
+
+
+```{r}
+ggplot(data = hd_EDA, aes(x = sex, fill = target)) + geom_bar() + ylab("Number of Patients") + xlab("Heart Disease Diagnosis") + facet_grid(~target)+ scale_color_jama()
+```
+
+### cp: Chest Pain Type
+- 0: asymptomatic
+- 1: atypical angina
+- 2: pain without relation to angina
+- 3: typical angina
+
+
+```{r}
+hd_EDA %>% group_by(cp) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, cp) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(cp, fill = target)) + geom_bar() + labs(fill = "Disease Status", x = "Chest Pain Type", y = "Number of Patients") + 
+  facet_grid(~target)+ scale_color_jama() + theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+hd_cp <- chisq.test(hd_EDA$cp, hd_EDA$target)
+print(hd_cp)
+print(hd_cp$residuals)
+```
+
+### trestbps: Resting Blood Pressure in mmHg at admittance
+
+```{r}
+hd_EDA %>% summarise(Mean_bps = mean(trestbps), Median_bps = median(trestbps), SD_bps = sd(trestbps))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_bps = mean(trestbps), Median_bps = median(trestbps), SD_bps = sd(trestbps))
+```
+
+```{r}
+ggplot(hd_EDA, aes(trestbps, fill = target)) + geom_histogram(binwidth = 3) + 
+  labs(fill = "Disease Status", x = "Blood Pressure at Admittance (mmHg)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_bps <- t.test(hd_EDA$trestbps ~ hd_EDA$target)
+print(hd_bps)
+```
+
+### chol: Cholesterol level in mg/dl
+
+```{r}
+hd_EDA %>% summarise(Mean_chol = mean(chol), Median_chol = median(chol), SD_chol = sd(chol))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_chol = mean(chol), Median_chol = median(chol), SD_chol = sd(chol))
+```
+
+```{r}
+ggplot(hd_EDA, aes(chol, fill = target)) + geom_histogram(binwidth = 10) + 
+  labs(fill = "Disease Status", x = "Cholesterol level (mg/dl)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_chol <- t.test(hd_EDA$chol ~ hd_EDA$target)
+print(hd_chol)
+```
+
+### fbs: Whether Blood Sugar Level is greater than 120 mg/dl
+
+```{r}
+hd_EDA %>% group_by(fbs) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, fbs) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(fbs, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Blood Sugar Level (md/dl)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_fbs <- chisq.test(hd_EDA$fbs, hd_EDA$target)
+print(hd_fbs)
+```
+
+### restecg: Resting Electrocardiogram 
+
+- 0: probable left ventricular hypertrophy
+- 1: normal
+- 2: abnormalities in the T wave or ST segment
+
+
+```{r}
+hd_EDA %>% group_by(restecg) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, restecg) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(restecg, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Resting Electrocardiogram Result)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+
+ use different test
+```{r}
+hd_ecg <- chisq.test(hd_EDA$restecg, hd_EDA$target)
+print(hd_ecg)
+print(hd_ecg$residuals)
+```
+
+
+### thalach: Maximum Heart Rate during Stress Test
+
+```{r}
+hd_EDA %>% summarise(Mean_thalach = mean(thalach), Median_thalach = median(thalach), SD_thalach = sd(thalach))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_thalach = mean(thalach), Median_thalach = median(thalach), SD_thalach = sd(thalach))
+```
+
+```{r}
+ggplot(hd_EDA, aes(thalach, fill = target)) + geom_histogram(binwidth = 5) + 
+  labs(fill = "Disease Status", x = "Maximu HR during Stress Test", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_thalach <- t.test(hd_EDA$thalach ~ hd_EDA$target)
+print(hd_thalach)
+```
+
+
+```{r}
+ggplot(data = hd_EDA, aes(x = target, y = thalach)) + geom_boxplot() + 
+  xlab("Heart Disease Diagnosis") + ylab("Maximum Heart Rate") + 
+  scale_color_jama()
+```
+
+
+
+### exang: Whether Patient had Angina During Exercise
+
+```{r}
+hd_EDA %>% group_by(exang) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, exang) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(exang, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Angina During Exercise)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+
+```{r}
+hd_exang <- chisq.test(hd_EDA$exang, hd_EDA$target)
+print(hd_exang)
+```
+
+### oldpeak: Decrease of the ST segment during Exercise according to the same one on rest
+
+
+```{r}
+hd_EDA %>% summarise(Mean_oldpeak = mean(oldpeak), Median_oldpeak = median(oldpeak), SD_oldpeak = sd(oldpeak))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_oldpeak = mean(oldpeak), Median_oldpeak = median(oldpeak), SD_oldpeak = sd(oldpeak))
+```
+
+```{r}
+ggplot(hd_EDA, aes(oldpeak, fill = target)) + geom_histogram(binwidth = 0.25) + 
+  labs(fill = "Disease Status", x = "Decrease of ST Segment", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_oldpeak <- t.test(hd_EDA$oldpeak ~ hd_EDA$target)
+print(hd_oldpeak)
+```
+
+
+
+
+### slope: Slope of the ST segment during the most demanding part of exercise
+
+- 0: descending
+- 1: flat
+- 2: ascending
+
+
+```{r}
+hd_EDA %>% group_by(slope) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, slope) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(slope, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Slope of ST Segment)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+
+```{r}
+hd_exang <- chisq.test(hd_EDA$exang, hd_EDA$target)
+print(hd_exang)
+```
+
+### thal: Results of the blood flow observed via radioactive dye
+
+- 0: NULL (dropped from the dataset previously)
+- 1: fixed defect (no blood flow in some part of the heart)
+- 2: normal blood flow
+- 3: reversible defect (a blood flow is observed but it is not normal)
+
+```{r}
+hd_EDA %>% group_by(thal) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, thal) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(thal, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Results of Blood Flow", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+need different test
+```{r}
+hd_exang <- chisq.test(hd_EDA$exang, hd_EDA$target)
+print(hd_exang)
+```
+
+
+### ca: Number of main blood vessels coloured by radioactive dye
+
+
+```{r}
+hd_EDA %>% group_by(ca) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, ca) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(ca, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Number of Coloured Blood Vessels", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+need different test
+```{r}
+hd_ca <- chisq.test(hd_EDA$ca, hd_EDA$target)
+print(hd_ca)
+```
+
+
+ Wilcoxon rank sum test; Pearson's Chi-squared test; Fisher's exact test 
+
+
+
+```{r, message = FALSE}
+hd_EDA %>% filter(thal != 0 & ca != 4) %>%
+  tbl_summary(by = target) %>% add_p() 
+```
+
+age: Chi-Squared - heart disease older than asymptomatic
+sex: Chi-Squared - More males with heart disease
+cp: 
+
+
+
+
+
+# Machine Learning
+
+## Training and Test sets
+
+
+
+```{r}
+hd_model <- na.omit(hd_model)
+
+set.seed(44)
+train.samples <- hd_model$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data <- hd_model[train.samples, ]
+test_data <- hd_model[-train.samples, ]
+```
+
+## Logistic Regression
+
+
+full model
+```{r}
+log_reg <- glm(data = train_data, target ~ ., family = "binomial" )
+summary(log_reg)
+```
+
+
+
+### LASSO
+
+```{r}
+x <- model.matrix(target ~ ., train_data)[,-1]
+y <- ifelse(train_data$target == "heart-disease", 1 , 0)
+```
+
+
+```{r}
+log_lasso <- glmnet(x, y, family = "binomial", alpha = 1, lambda = NULL)
+plot(log_lasso)
+```
+
+
+Let's use misclassification error in 10-fold cross validation
+```{r}
+cv_lasso <- cv.glmnet(x, y, family = "binomial", alpha = 1, lambda = NULL, type.measure = "class")
+plot(cv_lasso)
+```
+
+```{r}
+cv_lasso$lambda.min
+coef(cv_lasso, cv_lasso$lambda.min)
+cv_lasso$lambda.1se
+coef(cv_lasso, cv_lasso$lambda.1se)
+```
+
+```{r}
+cv_lasso_auc <- cv.glmnet(x, y, family = "binomial", alpha = 1, lambda = NULL, type.measure = "auc", keep = TRUE)
+
+rocs_l <- roc.glmnet(cv_lasso_auc$fit.preval, newy = y)
+```
+
+```{r}
+best_l_min <- cv_lasso_auc$index["min",]
+
+plot(rocs_l[[best_l_min]], type = "l")
+invisible(sapply(rocs_l, lines, col="grey"))
+lines(rocs_l[[best_l_min]], lwd = 2,col = "red")
+
+```
+
+
+```{r}
+best_l_1se <- cv_lasso_auc$index["1se",]
+plot(rocs_l[[best_l_1se]], type = "l")
+invisible(sapply(rocs_l, lines, col="grey"))
+lines(rocs_l[[best_l_1se]], lwd = 2,col = "blue")
+```
+
+LASSO Logistic Regression models
+```{r}
+lasso_model_min <- glmnet(x, y, alpha = 1, family = "binomial", 
+                      lambda = cv_lasso$lambda.min)
+
+lasso_model_1se <- glmnet(x, y, alpha = 1, family = "binomial", 
+                      lambda = cv_lasso$lambda.1se)
+```
+
+Let's look at the performance of the two penalized models on the test data
+```{r}
+test_x <- model.matrix(target ~., test_data)[,-1]
+test_y <- ifelse(test_data$target == "heart-disease", 1 , 0)
+
+
+a_min <- assess.glmnet(lasso_model_min, newx = test_x, newy = test_y, s = "lambda.min")
+a_1se <- assess.glmnet(lasso_model_1se, newx = test_x, newy = test_y, s = "lambda.1se")
+
+do.call(rbind, Map(data.frame, Lasso_min = a_min, Lasso_1se = a_1se))
+```
+
+
+
+Let's closer at the LASSO model with the minimum lambda value
+```{r}
+roc_lasso_min_t <- roc.glmnet(lasso_model_min, newx = test_x, newy = test_y)
+plot(roc_lasso_min_t, type = "l")
+```
+
+
+```{r}
+min_pred <- predict(lasso_model_min, newx = test_x)
+
+min_pred <- as.factor(ifelse(min_pred > 0.5, 1, 0))
+cnf_min <- confusionMatrix(min_pred, as.factor(test_y), positive = "1")
+cnf_min
+```
+
+
+
+
+
+
+
+Let's closer at the LASSO model with the 1 SE lambda value
+
+```{r}
+roc_lasso_1se_t <- roc.glmnet(lasso_model_1se, newx = test_x, newy = test_y)
+plot(roc_lasso_1se_t, type = "l")
+```
+
+
+```{r}
+onese_pred <- predict(lasso_model_1se, newx = test_x)
+
+onese_pred <- as.factor(ifelse(onese_pred > 0.5, 1, 0))
+cnf_1se <- confusionMatrix(onese_pred, as.factor(test_y), positive = "1")
+cnf_1se
+```
+
+
+
+### Ridge
+
+```{r}
+log_ridge <- glmnet(x, y, family = "binomial", alpha = 0, lambda = NULL)
+plot(log_ridge)
+```
+
+
+ridge model
+```{r}
+cv_ridge <- cv.glmnet(x, y, family = "binomial", alpha = 0, lambda = NULL, type.measure = "class")
+```
+
+```{r}
+coef(cv_ridge, cv_ridge$lambda.min)
+coef(cv_ridge, cv_ridge$lambda.1se)
+```
+
+```{r}
+plot(cv_ridge)
+```
+
+```{r}
+ridge_model_min <- glmnet(x, y, alpha = 0, family = "binomial", 
+                      lambda = cv_ridge$lambda.min)
+
+ridge_model_1se <- glmnet(x, y, alpha = 0, family = "binomial", 
+                      lambda = cv_ridge$lambda.1se)
+```
+
+
+
+```{r}
+test_x <- model.matrix(target ~., test_data)[,-1]
+test_y <- ifelse(test_data$target == "heart-disease", 1 , 0)
+
+
+ar_min <- assess.glmnet(ridge_model_min, newx = test_x, newy = test_y, s = "lambda.min")
+ar_1se <- assess.glmnet(ridge_model_1se, newx = test_x, newy = test_y, s = "lambda.1se")
+
+do.call(rbind, Map(data.frame, Ridge_min = ar_min, Ridge_1se = ar_1se))
+```
+
+
+```{r}
+cv_ridge_auc_r <- cv.glmnet(x, y, family = "binomial", alpha = 0, lambda = NULL, type.measure = "auc", keep = TRUE)
+
+rocs_r <- roc.glmnet(cv_ridge_auc_r$fit.preval, newy = y)
+```
+
+```{r}
+best_r_min <- cv_ridge_auc_r$index["min",]
+plot(rocs_r[[best_r_min]], type = "l")
+invisible(sapply(rocs_r, lines, col="grey"))
+lines(rocs_r[[best_r_min]], lwd = 2,col = "red")
+```
+
+```{r}
+best_r_1se <- cv_ridge_auc_r$index["1se",]
+plot(rocs_r[[best_r_1se]], type = "l")
+invisible(sapply(rocs_r, lines, col="grey"))
+lines(rocs_r[[best_r_1se]], lwd = 2,col = "blue")
+```
+
+```{r}
+min_pred_r <- predict(ridge_model_min, newx = test_x)
+
+min_pred_r <- as.factor(ifelse(min_pred_r > 0.5, 1, 0))
+cnf_min_r <- confusionMatrix(min_pred_r, as.factor(test_y), positive = "1")
+cnf_min_r
+```
+
+
+
+
+
+```{r}
+onese_pred_r <- predict(ridge_model_1se, newx = test_x)
+
+onese_pred_r <- as.factor(ifelse(onese_pred_r > 0.5, 1, 0))
+cnf_1se_r <- confusionMatrix(onese_pred_r, as.factor(test_y), positive = "1")
+cnf_1se_r
+```
+
+```{r}
+do.call(rbind, Map(data.frame, Lasso_min = cnf_min$byClass, Lasso_1se = cnf_1se$byClass, Ridge_min = cnf_min_r$byClass, Ridge_1se = cnf_1se_r$byClass))
+
+```
+
+
+
+
+## Random Forest 
+
+
+
+```{r}
+train_x_rf <- train_data %>% select(-target)
+train_y_rf <- train_data %>% select(target) %>% mutate(target = as.factor(target))
+
+test_x_rf <- test_data %>% select(-target)
+test_y_rf <- test_data %>% select(target) %>% mutate(target = as.factor(target))
+```
+
+```{r}
+rf <- randomForest(target ~ ., data = train_data, importance = TRUE)
+rf
+```
+
+
+```{r}
+importance(rf)
+
+varImpPlot(rf)
+
+```
+
+
+model tuning
+```{r}
+control_rf <- trainControl(method = "repeatedcv", number = 10, repeats = 3, search = "grid")
+
+tune_grid <- expand.grid(mtry = (1:15))
+
+rf_grid_search <- train(target ~ .,
+                        data = train_data,
+                        method = "rf",
+                        metric = "Accuracy",
+                        trControl = control_rf,
+                        tuneGrid = tune_grid)
+
+rf_grid_search
+```
+
+```{r}
+rf_best <- rf_grid_search
+plot(rf_best)
+
+cnf_rf <- confusionMatrix(predict(rf_best, test_x_rf), test_y_rf[,1], positive = "heart-disease")
+```
+
+```{r}
+ds_rf <- defaultSummary(data.frame(obs = test_y_rf[,1], 
+                                   pred = predict(rf_best, test_x_rf)))
+
+ds_rf
+```
+
+
+## Support Vector Machine
+
+
+
+```{r}
+hd_model_svm <- na.omit(hd_new)
+
+missing_ca_indeces <- which(hd_model_svm$ca %in% 4)
+missing_thal_indeces <-which(hd_model_svm$thal %in% 0)
+restecg_indices <-which(hd_model_svm$restecg %in% 2)
+missing_values_indeces <- c(missing_ca_indeces, missing_thal_indeces, restecg_indices)
+hd_model_svm <- hd_model_svm[-missing_values_indeces, ]
+
+hd_model_svm <- hd_model_svm %>% mutate(target = as.integer(target))
+set.seed(44)
+train.samples_svm <- hd_model_svm$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data_svm <- hd_model_svm[train.samples_svm, ]
+test_data_svm <- hd_model_svm[-train.samples_svm, ]
+```
+
+
+Let's scale the numeric variables and 1-hot encode the categorical ones
+
+```{r}
+train_data_svm <- train_data_svm %>% mutate(cp = as.factor(cp), restecg = as.factor(restecg),
+                                            exang = as.factor(exang), slope = as.factor(slope),
+                                            ca = as.factor(ca), thal = as.factor(thal))
+
+test_data_svm <- test_data_svm %>% mutate(cp = as.factor(cp), restecg = as.factor(restecg),
+                                            exang = as.factor(exang), slope = as.factor(slope),
+                                            ca = as.factor(ca), thal = as.factor(thal))
+
+
+train_data_svm[, c(1,4,5,8,10)] = scale(train_data_svm[, c(1,4,5,8,10)])
+test_data_svm[, c(1,4,5,8,10)] = scale(test_data_svm[, c(1,4,5,8,10)])
+
+dummy_train <- dummyVars(" ~ .", data = train_data_svm)
+dummy_test <- dummyVars(" ~ .", data = test_data_svm)
+
+train_data_svm <- data.frame(predict(dummy_train, newdata = train_data_svm))
+test_data_svm <- data.frame(predict(dummy_test, newdata = test_data_svm))
+
+train_data_svm$target <- as.factor(train_data_svm$target)
+test_data_svm$target <- as.factor(test_data_svm$target)
+```
+
+
+```{r}
+train_control_svm <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+svm_lin <- train(target ~ ., data = train_data_svm, method = "svmLinear", 
+                 trControl = train_control_svm, tuneLength = 10)
+
+svm_lin
+```
+
+```{r}
+pred_svm <- predict(svm_lin, train_data_svm)
+confusionMatrix(table(pred_svm, train_data_svm$target), positive = "1")
+```
+
+```{r}
+grid_lin <- expand.grid(C = c(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2,5))
+
+svm_lin_grid<- train(target ~., data = train_data_svm, method = "svmLinear", trControl = train_control_svm,
+                     tuneGrid = grid_lin, tuneLength = 10)
+svm_lin_grid
+plot(svm_lin_grid)
+```
+
+
+
+```{r}
+pred_svm_lin_grid <- predict(svm_lin_grid, newdata = test_data_svm)
+
+cnf_svm_lin <- confusionMatrix(pred_svm_lin_grid, test_data_svm$target, positive = "1")
+cnf_svm_lin
+```
+
+
+
+Radial
+```{r}
+svm_rad <- train(target ~ ., data = train_data_svm, method = "svmRadial", scale = FALSE,
+                 trControl = train_control_svm, tuneLength = 10)
+
+svm_rad
+plot(svm_rad)
+```
+
+```{r}
+
+pred_rad <- predict(svm_rad, train_data_svm)
+
+confusionMatrix(table(pred_rad, train_data_svm$target))
+  
+```
+
+```{r}
+grid_rad <- expand.grid(sigma = c(0, 0.001, 0.01, 0.02, 0.1, 0.25, 0.5, 0.75,0.9),
+ C = c(0.01, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1))
+
+svm_rad_grid<- train(target ~., data = train_data_svm, method = "svmRadial", scale = FALSE, trControl = train_control_svm,
+                     tuneGrid = grid_rad, tuneLength = 10)
+svm_rad_grid
+```
+
+
+```{r}
+plot(svm_rad_grid)
+```
+
+
+```{r}
+pred_svm_rad_grid <- predict(svm_rad_grid, newdata = test_data_svm)
+
+cnf_svm_rad <- confusionMatrix(pred_svm_rad_grid, test_data_svm$target, positive = "1")
+cnf_svm_rad
+```
+
+
+## PCA then SVM
+
+```{r}
+hd_model1 <- hd_model %>% mutate(cp = as.factor(cp), restecg = as.factor(restecg),
+                                            exang = as.factor(exang), slope = as.factor(slope),
+                                            ca = as.factor(ca), thal = as.factor(thal), fbs = as.factor(fbs),
+                                            sex = as.factor(sex)) 
+
+hd_model2 <- hd_model1 %>% select(-c(target))
+```
+
+Using PCA of Mixed Data
+```{r}
+X.quanti <- splitmix(hd_model2)$X.quanti
+X.quali <- splitmix(hd_model2)$X.quali
+
+pca <- PCAmix(X.quanti, X.quali, ndim = 6, rename.level = TRUE)
+summary(pca)
+```
+
+```{r}
+pca$eig
+```
+
+```{r}
+barplot(pca$eig[,2], ylim = c(0,20), las = 2)
+```
+
+
+```{r}
+pca1 = data.frame(pca$ind$coord, hd_model1$target)
+ggplot(pca1, aes(x = dim.1, y = dim.2, color = hd_model1.target)) + 
+  geom_point() + 
+  theme_bw() +
+  guides(color = guide_legend(title = "Has heart \n disease?")) + 
+  ggtitle("PCA of heart disease") +
+  xlab(paste("Dimension 1", paste0("(", 
+                                   round(pca$eig[1, 2], 2), 
+                                   "%", ")"))) + 
+  ylab(paste("Dimension 2", paste0("(", 
+                                   round(pca$eig[2, 2], 2), 
+                                   "%", ")")))
+```
+
+```{r}
+pca2 = data.frame(pca$sqload)
+# Dimension 1
+ggplot(pca2, aes(x = reorder(rownames(pca2), -dim.1), y = dim.1)) + 
+  geom_bar(stat = "identity") + 
+  theme_bw() + ggtitle("Dimension 1 loadings") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# Dimension 2
+ggplot(pca2, aes(x = reorder(rownames(pca2), -dim.2), y = dim.2)) + 
+  geom_bar(stat = "identity") + 
+  theme_bw() + ggtitle("Dimension 2 loadings") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+pcamix_data <- pca$scores[,1:6]
+
+pcamix_data = cbind(hd_model1$target, pcamix_data)
+colnames(pcamix_data) = c("target", "p1", "p2", "p3", "p4", "p5", "p6")
+
+pcamix_data <- as.data.frame(pcamix_data)
+pcamix_data <- pcamix_data %>% mutate(target = as.factor(target))
+
+head(pcamix_data)
+```
+
+
+```{r}
+pca_svm_model <- pcamix_data
+
+set.seed(4)
+train.samples_pca_svm <- pca_svm_model$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data_pca_svm <- pca_svm_model[train.samples_pca_svm, ]
+test_data_pca_svm <- pca_svm_model[-train.samples_pca_svm, ]
+```
+
+
+```{r}
+pca_svm_lin <- train(target ~ ., data = train_data_pca_svm, method = "svmLinear", 
+                 trControl = train_control_svm, tuneLength = 10)
+
+pca_svm_lin
+```
+
+```{r}
+pred_pca_svm <- predict(pca_svm_lin, train_data_pca_svm)
+
+confusionMatrix(table(pred_pca_svm, train_data_pca_svm$target))
+```
+
+```{r}
+grid_lin <- expand.grid(C = c(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2,3,4,5,10,20))
+
+pca_svm_lin_grid<- train(target ~., data = train_data_pca_svm, method = "svmLinear", trControl = train_control_svm,
+                     tuneGrid = grid_lin, tuneLength = 10)
+pca_svm_lin_grid
+plot(pca_svm_lin_grid)
+```
+
+
+```{r}
+best_pca_svm_lin <- pca_svm_lin_grid
+```
+
+
+```{r}
+pred_pca_svm_lin_best <- predict(best_pca_svm_lin, newdata = test_data_pca_svm)
+
+cnf_pca_svm_lin <- confusionMatrix(pred_pca_svm_lin_best, test_data_pca_svm$target)
+cnf_pca_svm_lin
+```
+
+```{r}
+tune_pca_svm_rad <- tune(svm, target ~ ., data = train_data_pca_svm, kernel = "radial", 
+                         ranges = list(gamma = c(0, 0.0001, 0.001,0.01, 0.1, 0.3, 0.5, 0.75, 1), cost = c(5, 10, 50, 100)))
+
+summary(tune_pca_svm_rad)
+```
+
+```{r}
+best_pca_svm_rad <- tune_pca_svm_rad$best.model
+```
+
+
+```{r}
+pred_pca_svm_rad_tune <- predict(best_pca_svm_rad, newdata = test_data_pca_svm)
+
+cnf_pca_svm_rad <- confusionMatrix(pred_pca_svm_rad_tune, test_data_pca_svm$target)
+cnf_pca_svm_rad
+```
+
+
+
+
+
+## Compare Models
+
+
+
+
+
+
+
+```{r}
+do.call(rbind, Map(data.frame, Lasso_min = cnf_min$byClass, 
+                   Lasso_1se = cnf_1se$byClass, 
+                   Ridge_min = cnf_min_r$byClass, 
+                   Ridge_1se = cnf_1se_r$byClass, 
+                   RandomForest = cnf_rf$byClass, 
+                   LinearSVM = cnf_svm_lin$byClass, 
+                   RadialSVM = cnf_svm_rad$byClass,
+                   PCASVMLinear = cnf_pca_svm_lin$byClass, 
+                   PCASVMRadial = cnf_pca_svm_rad$byClass))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

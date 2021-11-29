@@ -1,0 +1,280 @@
+---
+title: "Heart Disease PCA and SVM"
+author: "Lucas Mendicino"
+date: "11/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+## Support Vector Machine
+
+
+# Load Packages
+```{r}
+library(tidyverse)
+library(caret)
+library(e1071)
+library(factoextra)
+library(FactoMineR)
+library(PCAmixdata)
+```
+
+# Prepare the Data
+
+Let's load the data
+```{r}
+# Read datasets Cleveland_hd.csv into hd_data
+hd <- read.csv("~/Desktop/UCI-Heart-Disease-Prediction/heart.csv")
+```
+
+Let's look at the structure and a few rows
+```{r}
+str(hd)
+head(hd)
+```
+                                            
+The variables include:
+
+- age: age in years
+- sex: (1 = male; 0 = female)
+- cp: chest pain type (typical angina, atypical angina, non-anginal pain, or asymptomatic angina)
+- trestbps: resting blood pressure (in mm Hg on admission to the hospital)
+- chol: serum cholestoral in mg/dl
+- fbs: Fasting blood sugar (< 120 mg/dl or > 120 mg/dl) (1 = true; 0 = false)
+- restecg: resting electrocardiographic results (normal, ST-T wave abnormality, or left ventricular hypertrophy)
+- thalach: Max. heart rate achieved during thalium stress test
+- exang: Exercise induced angina (1 = yes; 0 = no)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: Slope of peak exercise ST segment (0 = upsloping, 1 = flat, or 2 = downsloping)
+- ca: number of major vessels (0-3) colored by flourosopy 4 = NA
+- thal: Thalium stress test result 3 = normal; 6 = fixed defect; 7 = reversable defect 0 = NA
+- target: Heart disease status 1 or 0 (0 = heart disease 1 = asymptomatic)
+
+It is important to note that for the target variable, 0 is assigned to heart disease and 1 is asymptomatic. Let's recode this.
+
+
+```{r}
+hd_new <- hd %>% mutate(target = recode(target, "0" = "1", "1" = "0"))
+```
+
+
+Let's tidy the dataset a bit more.
+
+```{r}
+hd_model <- hd_new %>%
+  filter(
+    thal != 0 & ca != 4 # remove values correspondind to NA in original dataset
+  ) %>%
+# Recode the categorical variables as factors using the dplyr library.
+  mutate(
+    sex = case_when(
+      sex == 0 ~ "female",
+      sex == 1 ~ "male"
+           ),
+    fbs = case_when(
+      fbs == 0 ~ "<=120",
+      fbs == 1 ~ ">120"
+            ),
+    exang = case_when(
+      exang == 0 ~ "no",
+      exang == 1 ~ "yes"
+            ),
+    cp = case_when(
+      cp == 3 ~ "typical angina",
+      cp == 1 ~ "atypical angina",
+      cp == 2 ~ "non-anginal pain",
+      cp == 0 ~ "asymptomatic angina"
+          ),
+    restecg = case_when(
+      restecg == 0 ~ "hypertrophy",
+      restecg == 1 ~ "normal",
+      restecg == 2 ~ "wave abnormality"
+              ),
+    target = case_when(
+      target == 0 ~ "asymptomatic",
+      target == 1 ~ "heart-disease"
+              ),
+    slope = case_when(
+      slope == 2 ~ "upsloping",
+      slope == 1 ~ "flat",
+      slope == 0 ~ "downsloping"
+    ),
+    thal = case_when(
+      thal == 1 ~ "fixed defect",
+      thal == 2 ~ "normal",
+      thal == 3 ~ "reversable defect"
+    ),
+    sex = as.factor(sex),
+    fbs = as.factor(fbs),
+    exang = as.factor(exang),
+    cp = as.factor(cp),
+    slope = as.factor(slope),
+    ca = as.factor(ca),
+    thal = as.factor(thal),
+    restecg = as.factor(restecg),
+    target = as.factor(target)
+  )
+
+```
+
+
+
+## PCA
+
+
+
+```{r}
+hd_model1 <- hd_model %>% mutate(cp = as.factor(cp), restecg = as.factor(restecg),
+                                            exang = as.factor(exang), slope = as.factor(slope),
+                                            ca = as.factor(ca), thal = as.factor(thal), fbs = as.factor(fbs),
+                                            sex = as.factor(sex)) 
+
+hd_model2 <- hd_model1 %>% select(-c(target))
+
+str(hd_model2)
+```
+
+Using PCA of Mixed Data
+```{r}
+X.quanti <- splitmix(hd_model2)$X.quanti
+X.quali <- splitmix(hd_model2)$X.quali
+
+pca <- PCAmix(X.quanti, X.quali, ndim = 6, rename.level = TRUE)
+summary(pca)
+```
+
+```{r}
+pca$eig
+```
+
+
+
+```{r}
+barplot(pca$eig[,2], ylim = c(0,20), las = 2)
+```
+
+
+```{r}
+pca1 = data.frame(pca$ind$coord, hd_model1$target)
+ggplot(pca1, aes(x = dim.1, y = dim.2, color = hd_model1.target)) + 
+  geom_point() + 
+  theme_bw() +
+  guides(color = guide_legend(title = "Has heart \n disease?")) + 
+  ggtitle("PCA of heart disease") +
+  xlab(paste("Dimension 1", paste0("(", 
+                                   round(pca$eig[1, 2], 2), 
+                                   "%", ")"))) + 
+  ylab(paste("Dimension 2", paste0("(", 
+                                   round(pca$eig[2, 2], 2), 
+                                   "%", ")")))
+```
+```{r}
+pca2 = data.frame(pca$sqload)
+# Dimension 1
+ggplot(pca2, aes(x = reorder(rownames(pca2), -dim.1), y = dim.1)) + 
+  geom_bar(stat = "identity") + 
+  theme_bw() + ggtitle("Dimension 1 loadings") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# Dimension 2
+ggplot(pca2, aes(x = reorder(rownames(pca2), -dim.2), y = dim.2)) + 
+  geom_bar(stat = "identity") + 
+  theme_bw() + ggtitle("Dimension 2 loadings") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+pcamix_data <- pca$scores[,1:6]
+
+pcamix_data = cbind(hd_model1$target, pcamix_data)
+colnames(pcamix_data) = c("target", "p1", "p2", "p3", "p4", "p5", "p6")
+
+pcamix_data <- as.data.frame(pcamix_data)
+pcamix_data <- pcamix_data %>% mutate(target = as.factor(target))
+
+head(pcamix_data)
+```
+
+
+```{r}
+pca_svm_model <- pcamix_data
+
+set.seed(4)
+train.samples_pca_svm <- pca_svm_model$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data_pca_svm <- pca_svm_model[train.samples_pca_svm, ]
+test_data_pca_svm <- pca_svm_model[-train.samples_pca_svm, ]
+```
+
+
+```{r}
+
+pca_svm_lin <- train(target ~ ., data = train_data_pca_svm, method = "svmLinear", 
+                 trControl = train_control_svm, tuneLength = 10)
+
+pca_svm_lin
+```
+
+```{r}
+
+pred_pca_svm <- predict(pca_svm_lin, train_data_pca_svm)
+
+confusionMatrix(table(pred_pca_svm, train_data_pca_svm$target))
+  
+```
+
+```{r}
+grid_lin <- expand.grid(C = c(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2,5,10))
+
+pca_svm_lin_grid<- train(target ~., data = train_data_pca_svm, method = "svmLinear", trControl = train_control_svm,
+                     tuneGrid = grid_lin, tuneLength = 10)
+pca_svm_lin_grid
+plot(pca_svm_lin_grid)
+```
+
+
+```{r}
+best_pca_svm_lin <- pca_svm_lin_grid
+```
+
+
+```{r}
+pred_pca_svm_lin_best <- predict(best_pca_svm_lin, newdata = test_data_pca_svm)
+
+confusionMatrix(pred_pca_svm_lin_best, test_data_pca_svm$target)
+```
+
+```{r}
+tune_pca_svm_rad <- tune(svm, target ~ ., data = train_data_pca_svm, kernel = "radial", 
+                         ranges = list(gamma = c(0, 0.0001, 0.001,0.01, 0.1, 0.3, 0.5, 0.75, 1), cost = c(5, 10, 50, 100)))
+
+summary(tune_pca_svm_rad)
+```
+
+```{r}
+best_pca_svm_rad <- tune_pca_svm_rad$best.model
+```
+
+
+```{r}
+pred_pca_svm_rad_tune <- predict(best_pca_svm_rad, newdata = test_data_pca_svm)
+
+confusionMatrix(pred_pca_svm_rad_tune, test_data_pca_svm$target)
+```
+
+
+
+
+
+
+
+
+
+

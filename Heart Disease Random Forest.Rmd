@@ -1,0 +1,188 @@
+---
+title: "Heart Disease Random Forest"
+author: "Lucas Mendicino"
+date: "11/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load Packages
+```{r}
+library(tidyverse)
+library(caret)
+library(randomForest)
+
+```
+
+# Prepare the Data
+
+Let's load the data
+```{r}
+# Read datasets Cleveland_hd.csv into hd_data
+hd <- read.csv("~/Desktop/UCI-Heart-Disease-Prediction/heart.csv")
+```
+
+Let's look at the structure and a few rows
+```{r}
+str(hd)
+head(hd)
+```
+                                            
+The variables include:
+
+- age: age in years
+- sex: (1 = male; 0 = female)
+- cp: chest pain type (typical angina, atypical angina, non-anginal pain, or asymptomatic angina)
+- trestbps: resting blood pressure (in mm Hg on admission to the hospital)
+- chol: serum cholestoral in mg/dl
+- fbs: Fasting blood sugar (< 120 mg/dl or > 120 mg/dl) (1 = true; 0 = false)
+- restecg: resting electrocardiographic results (normal, ST-T wave abnormality, or left ventricular hypertrophy)
+- thalach: Max. heart rate achieved during thalium stress test
+- exang: Exercise induced angina (1 = yes; 0 = no)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: Slope of peak exercise ST segment (0 = upsloping, 1 = flat, or 2 = downsloping)
+- ca: number of major vessels (0-3) colored by flourosopy 4 = NA
+- thal: Thalium stress test result 3 = normal; 6 = fixed defect; 7 = reversable defect 0 = NA
+- target: Heart disease status 1 or 0 (0 = heart disease 1 = asymptomatic)
+
+It is important to note that for the target variable, 0 is assigned to heart disease and 1 is asymptomatic. Let's recode this.
+
+
+```{r}
+hd_new <- hd %>% mutate(target = recode(target, "0" = "1", "1" = "0"))
+```
+
+
+Let's tidy the dataset a bit more.
+
+```{r}
+hd_model <- hd_new %>%
+  filter(
+    thal != 0 & ca != 4 # remove values correspondind to NA in original dataset
+  ) %>%
+# Recode the categorical variables as factors using the dplyr library.
+  mutate(
+    sex = case_when(
+      sex == 0 ~ "female",
+      sex == 1 ~ "male"
+           ),
+    fbs = case_when(
+      fbs == 0 ~ "<=120",
+      fbs == 1 ~ ">120"
+            ),
+    exang = case_when(
+      exang == 0 ~ "no",
+      exang == 1 ~ "yes"
+            ),
+    cp = case_when(
+      cp == 3 ~ "typical angina",
+      cp == 1 ~ "atypical angina",
+      cp == 2 ~ "non-anginal pain",
+      cp == 0 ~ "asymptomatic angina"
+          ),
+    restecg = case_when(
+      restecg == 0 ~ "hypertrophy",
+      restecg == 1 ~ "normal",
+      restecg == 2 ~ "wave abnormality"
+              ),
+    target = case_when(
+      target == 0 ~ "asymptomatic",
+      target == 1 ~ "heart-disease"
+              ),
+    slope = case_when(
+      slope == 2 ~ "upsloping",
+      slope == 1 ~ "flat",
+      slope == 0 ~ "downsloping"
+    ),
+    thal = case_when(
+      thal == 1 ~ "fixed defect",
+      thal == 2 ~ "normal",
+      thal == 3 ~ "reversable defect"
+    ),
+    sex = as.factor(sex),
+    fbs = as.factor(fbs),
+    exang = as.factor(exang),
+    cp = as.factor(cp),
+    slope = as.factor(slope),
+    ca = as.factor(ca),
+    thal = as.factor(thal),
+    restecg = as.factor(restecg),
+    target = as.factor(target)
+  )
+
+```
+
+
+
+## Training and Test sets
+
+
+```{r}
+hd_model <- na.omit(hd_model)
+
+set.seed(44)
+train.samples <- hd_model$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data <- hd_model[train.samples, ]
+test_data <- hd_model[-train.samples, ]
+
+train_x <- train_data %>% select(-target)
+train_y <- train_data %>% select(target) %>% mutate(target = as.factor(target))
+
+test_x <- test_data %>% select(-target)
+test_y <- test_data %>% select(target) %>% mutate(target = as.factor(target))
+
+```
+
+
+
+
+```{r}
+rf <- randomForest(target ~ ., data = train_data, importance = TRUE)
+rf
+```
+
+
+```{r}
+importance(rf)
+
+varImpPlot(rf)
+
+```
+
+
+model tuning
+```{r}
+control_rf <- trainControl(method = "repeatedcv", number = 10, repeats = 3, search = "grid")
+
+tune_grid <- expand.grid(mtry = (1:15))
+
+rf_grid_search <- train(target ~ .,
+                        data = train_data,
+                        method = "rf",
+                        metric = "Accuracy",
+                        trControl = control_rf,
+                        tuneGrid = tune_grid)
+
+rf_grid_search
+```
+
+```{r}
+rf_best <- rf_grid_search
+plot(rf_best)
+
+confusionMatrix(predict(rf_best, test_x), test_y[,1], positive = "heart-disease")
+```
+
+```{r}
+ds_rf <- defaultSummary(data.frame(obs = test_y[,1], 
+                                   pred = predict(rf_best, test_x)))
+
+ds_rf
+```
+

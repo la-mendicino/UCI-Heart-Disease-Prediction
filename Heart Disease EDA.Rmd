@@ -1,0 +1,508 @@
+---
+title: "Heart Disease EDA"
+author: "Lucas Mendicino"
+date: "11/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load Packages
+```{r}
+library(tidyverse) 
+library(DataExplorer)
+library(gtsummary)
+library(ggsci)
+theme_gtsummary_journal(journal = "jama")
+
+```
+
+In this project, I will be using the Heart Disease dataset from the UC Irvine Machine Learning Repository. The dataset contains 14 features.
+
+# Outline
+
+1. Prepare the Data
+2. Exploratory Data Analysis
+3. Modeling
+- Clustering (Principle Component Analysis, Hierarchical Clustering Analysis, K-Means)
+- Logistic Regression
+- Random Forest
+- SVM
+- 
+
+# Prepare the Data
+
+Let's load the data
+```{r}
+# Read datasets Cleveland_hd.csv into hd_data
+hd <- read.csv("~/Desktop/UCI-Heart-Disease-Prediction/heart.csv")
+```
+
+Let's look at the structure and a few rows
+```{r}
+str(hd)
+head(hd)
+```
+                                            
+The variables include:
+
+- age: age in years
+- sex: (1 = male; 0 = female)
+- cp: chest pain type (typical angina, atypical angina, non-anginal pain, or asymptomatic angina)
+- trestbps: resting blood pressure (in mm Hg on admission to the hospital)
+- chol: serum cholestoral in mg/dl
+- fbs: Fasting blood sugar (< 120 mg/dl or > 120 mg/dl) (1 = true; 0 = false)
+- restecg: resting electrocardiographic results (normal, ST-T wave abnormality, or left ventricular hypertrophy)
+- thalach: Max. heart rate achieved during thalium stress test
+- exang: Exercise induced angina (1 = yes; 0 = no)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: Slope of peak exercise ST segment (0 = upsloping, 1 = flat, or 2 = downsloping)
+- ca: number of major vessels (0-3) colored by flourosopy 4 = NA
+- thal: Thalium stress test result 3 = normal; 6 = fixed defect; 7 = reversable defect 0 = NA
+- target: Heart disease status 1 or 0 (0 = heart disease 1 = asymptomatic)
+
+It is important to note that for the target variable, 0 is assigned to heart disease and 1 is asymptomatic. Let's recode this.
+
+
+```{r}
+hd_new <- hd %>% mutate(target = recode(target, "0" = "1", "1" = "0"))
+```
+
+
+Let's tidy the dataset a bit more.
+
+```{r}
+hd_EDA <- hd_new %>%
+  filter(
+    thal != 0 & ca != 4 # remove values correspondind to NA in original dataset
+  ) %>%
+# Recode the categorical variables as factors using the dplyr library.
+  mutate(
+    sex = case_when(
+      sex == 0 ~ "female",
+      sex == 1 ~ "male"
+           ),
+    fbs = case_when(
+      fbs == 0 ~ "<=120",
+      fbs == 1 ~ ">120"
+            ),
+    exang = case_when(
+      exang == 0 ~ "no",
+      exang == 1 ~ "yes"
+            ),
+    cp = case_when(
+      cp == 3 ~ "typical angina",
+      cp == 1 ~ "atypical angina",
+      cp == 2 ~ "non-anginal pain",
+      cp == 0 ~ "asymptomatic angina"
+          ),
+    restecg = case_when(
+      restecg == 0 ~ "hypertrophy",
+      restecg == 1 ~ "normal",
+      restecg == 2 ~ "wave abnormality"
+              ),
+    target = case_when(
+      target == 0 ~ "asymptomatic",
+      target == 1 ~ "heart-disease"
+              ),
+    slope = case_when(
+      slope == 2 ~ "upsloping",
+      slope == 1 ~ "flat",
+      slope == 0 ~ "downsloping"
+    ),
+    thal = case_when(
+      thal == 1 ~ "fixed defect",
+      thal == 2 ~ "normal",
+      thal == 3 ~ "reversable defect"
+    ),
+    sex = as.factor(sex),
+    fbs = as.factor(fbs),
+    exang = as.factor(exang),
+    cp = as.factor(cp),
+    slope = as.factor(slope),
+    ca = as.factor(ca),
+    thal = as.factor(thal),
+    restecg = as.factor(restecg),
+    target = as.factor(target)
+  )
+
+```
+
+```{r}
+str(hd_EDA)
+```
+
+# Exploratory Data Analysis
+
+Let's check out missing values
+```{r}
+plot_missing(hd_EDA)
+```
+The dataset is complete with no missing values.
+
+Let's get summary statistics:
+
+```{r, message = FALSE}
+hd_EDA %>% tbl_summary(statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p}%)"),
+                    digits = all_continuous() ~ 2)
+```
+
+
+
+
+
+
+
+### Target: Whether patient has heart disease or not
+
+```{r}
+hd_EDA %>% group_by(target) %>% count()
+
+ggplot(hd_EDA, aes(target, fill = target)) + geom_bar() + xlab("Disease Status") + ylab("Number of Patients")+ scale_color_jama()
+```
+### Age: age in years
+
+```{r}
+hd_EDA %>% summarise(Mean_Age = mean(age), Median_Age = median(age), SD_age = sd(age))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_Age = mean(age), Median_Age = median(age), SD_age = sd(age))
+```
+
+```{r}
+ggplot(hd_EDA, aes(age, fill = target)) + geom_histogram(binwidth = 1) + labs(fill = "Disease Status", x = "Age", y = "Number of Patients") + facet_grid(~target) + scale_color_jama()
+```
+
+Does age have an effect? Let's use a t-test
+```{r}
+hd_age <- t.test(hd_EDA$age ~ hd_EDA$target)
+print(hd_age)
+```
+
+```{r}
+ggplot(data = hd_EDA, aes(x = target, y = age)) + geom_boxplot() + xlab("Heart Disease Diagnosis")
+```
+
+### Sex: Patient Sex
+
+```{r}
+hd_EDA %>% group_by(sex) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, sex) %>% count() 
+```
+
+Does sex have an effect? Let's use a chi-squared test
+```{r}
+hd_sex <- chisq.test(hd_EDA$sex, hd_EDA$target)
+print(hd_sex)
+```
+
+
+```{r}
+ggplot(data = hd_EDA, aes(x = sex, fill = target)) + geom_bar() + ylab("Number of Patients") + xlab("Heart Disease Diagnosis") + facet_grid(~target)+ scale_color_jama()
+```
+
+### cp: Chest Pain Type
+- 0: asymptomatic
+- 1: atypical angina
+- 2: pain without relation to angina
+- 3: typical angina
+
+
+```{r}
+hd_EDA %>% group_by(cp) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, cp) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(cp, fill = target)) + geom_bar() + labs(fill = "Disease Status", x = "Chest Pain Type", y = "Number of Patients") + 
+  facet_grid(~target)+ scale_color_jama() + theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+hd_cp <- chisq.test(hd_EDA$cp, hd_EDA$target)
+print(hd_cp)
+print(hd_cp$residuals)
+```
+
+### trestbps: Resting Blood Pressure in mmHg at admittance
+
+```{r}
+hd_EDA %>% summarise(Mean_bps = mean(trestbps), Median_bps = median(trestbps), SD_bps = sd(trestbps))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_bps = mean(trestbps), Median_bps = median(trestbps), SD_bps = sd(trestbps))
+```
+
+```{r}
+ggplot(hd_EDA, aes(trestbps, fill = target)) + geom_histogram(binwidth = 3) + 
+  labs(fill = "Disease Status", x = "Blood Pressure at Admittance (mmHg)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_bps <- t.test(hd_EDA$trestbps ~ hd_EDA$target)
+print(hd_bps)
+```
+
+### chol: Cholesterol level in mg/dl
+
+```{r}
+hd_EDA %>% summarise(Mean_chol = mean(chol), Median_chol = median(chol), SD_chol = sd(chol))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_chol = mean(chol), Median_chol = median(chol), SD_chol = sd(chol))
+```
+
+```{r}
+ggplot(hd_EDA, aes(chol, fill = target)) + geom_histogram(binwidth = 10) + 
+  labs(fill = "Disease Status", x = "Cholesterol level (mg/dl)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_chol <- t.test(hd_EDA$chol ~ hd_EDA$target)
+print(hd_chol)
+```
+
+### fbs: Whether Blood Sugar Level is greater than 120 mg/dl
+
+```{r}
+hd_EDA %>% group_by(fbs) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, fbs) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(fbs, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Blood Sugar Level (md/dl)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_fbs <- chisq.test(hd_EDA$fbs, hd_EDA$target)
+print(hd_fbs)
+```
+
+### restecg: Resting Electrocardiogram 
+
+- 0: probable left ventricular hypertrophy
+- 1: normal
+- 2: abnormalities in the T wave or ST segment
+
+
+```{r}
+hd_EDA %>% group_by(restecg) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, restecg) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(restecg, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Resting Electrocardiogram Result)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+
+ use different test
+```{r}
+hd_ecg <- chisq.test(hd_EDA$restecg, hd_EDA$target)
+print(hd_ecg)
+print(hd_ecg$residuals)
+```
+
+
+### thalach: Maximum Heart Rate during Stress Test
+
+```{r}
+hd_EDA %>% summarise(Mean_thalach = mean(thalach), Median_thalach = median(thalach), SD_thalach = sd(thalach))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_thalach = mean(thalach), Median_thalach = median(thalach), SD_thalach = sd(thalach))
+```
+
+```{r}
+ggplot(hd_EDA, aes(thalach, fill = target)) + geom_histogram(binwidth = 5) + 
+  labs(fill = "Disease Status", x = "Maximu HR during Stress Test", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_thalach <- t.test(hd_EDA$thalach ~ hd_EDA$target)
+print(hd_thalach)
+```
+
+
+```{r}
+ggplot(data = hd_EDA, aes(x = target, y = thalach)) + geom_boxplot() + 
+  xlab("Heart Disease Diagnosis") + ylab("Maximum Heart Rate") + 
+  scale_color_jama()
+```
+
+
+
+### exang: Whether Patient had Angina During Exercise
+
+```{r}
+hd_EDA %>% group_by(exang) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, exang) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(exang, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Angina During Exercise)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+
+```{r}
+hd_exang <- chisq.test(hd_EDA$exang, hd_EDA$target)
+print(hd_exang)
+```
+
+### oldpeak: Decrease of the ST segment during Exercise according to the same one on rest
+
+
+```{r}
+hd_EDA %>% summarise(Mean_oldpeak = mean(oldpeak), Median_oldpeak = median(oldpeak), SD_oldpeak = sd(oldpeak))
+```
+
+```{r}
+hd_EDA %>% group_by(target) %>% summarise(Mean_oldpeak = mean(oldpeak), Median_oldpeak = median(oldpeak), SD_oldpeak = sd(oldpeak))
+```
+
+```{r}
+ggplot(hd_EDA, aes(oldpeak, fill = target)) + geom_histogram(binwidth = 0.25) + 
+  labs(fill = "Disease Status", x = "Decrease of ST Segment", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+```{r}
+hd_oldpeak <- t.test(hd_EDA$oldpeak ~ hd_EDA$target)
+print(hd_oldpeak)
+```
+
+
+
+
+### slope: Slope of the ST segment during the most demanding part of exercise
+
+- 0: descending
+- 1: flat
+- 2: ascending
+
+
+```{r}
+hd_EDA %>% group_by(slope) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, slope) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(slope, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Slope of ST Segment)", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+
+```{r}
+hd_exang <- chisq.test(hd_EDA$exang, hd_EDA$target)
+print(hd_exang)
+```
+
+### thal: Results of the blood flow observed via radioactive dye
+
+- 0: NULL (dropped from the dataset previously)
+- 1: fixed defect (no blood flow in some part of the heart)
+- 2: normal blood flow
+- 3: reversible defect (a blood flow is observed but it is not normal)
+
+```{r}
+hd_EDA %>% group_by(thal) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, thal) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(thal, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Results of Blood Flow", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+need different test
+```{r}
+hd_exang <- chisq.test(hd_EDA$exang, hd_EDA$target)
+print(hd_exang)
+```
+
+
+### ca: Number of main blood vessels coloured by radioactive dye
+
+
+```{r}
+hd_EDA %>% group_by(ca) %>% count()
+```
+
+```{r}
+hd_EDA %>% group_by(target, ca) %>% count() 
+```
+
+
+```{r}
+ggplot(hd_EDA, aes(ca, fill = target)) + geom_bar() + 
+  labs(fill = "Disease Status", x = "Number of Coloured Blood Vessels", y = "Number of Patients") +
+  facet_grid(~target)+ scale_color_jama()
+```
+
+need different test
+```{r}
+hd_ca <- chisq.test(hd_EDA$ca, hd_EDA$target)
+print(hd_ca)
+```
+
+
+ Wilcoxon rank sum test; Pearson's Chi-squared test; Fisher's exact test 
+
+
+
+```{r, message = FALSE}
+hd_EDA %>% filter(thal != 0 & ca != 4) %>%
+  tbl_summary(by = target) %>% add_p() 
+```
+
+age: Chi-Squared - heart disease older than asymptomatic
+sex: Chi-Squared - More males with heart disease
+cp: 
+
+
+

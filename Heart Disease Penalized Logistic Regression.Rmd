@@ -1,0 +1,333 @@
+---
+title: "Heart Disease Logistic Regression"
+author: "Lucas Mendicino"
+date: "11/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load Packages
+```{r}
+library(tidyverse) 
+library(caret)
+library(glmnet)
+```
+
+```{r}
+# Read datasets Cleveland_hd.csv into hd_data
+hd <- read.csv("~/Desktop/UCI-Heart-Disease-Prediction/heart.csv")
+```
+
+Let's look at the structure and a few rows
+```{r}
+str(hd)
+head(hd)
+```
+                                            
+The variables include:
+
+- age: age in years
+- sex: (1 = male; 0 = female)
+- cp: chest pain type (typical angina, atypical angina, non-anginal pain, or asymptomatic angina)
+- trestbps: resting blood pressure (in mm Hg on admission to the hospital)
+- chol: serum cholestoral in mg/dl
+- fbs: Fasting blood sugar (< 120 mg/dl or > 120 mg/dl) (1 = true; 0 = false)
+- restecg: resting electrocardiographic results (normal, ST-T wave abnormality, or left ventricular hypertrophy)
+- thalach: Max. heart rate achieved during thalium stress test
+- exang: Exercise induced angina (1 = yes; 0 = no)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: Slope of peak exercise ST segment (0 = upsloping, 1 = flat, or 2 = downsloping)
+- ca: number of major vessels (0-3) colored by flourosopy 4 = NA
+- thal: Thalium stress test result 3 = normal; 6 = fixed defect; 7 = reversable defect 0 = NA
+- target: Heart disease status 1 or 0 (0 = heart disease 1 = asymptomatic)
+
+It is important to note that for the target variable, 0 is assigned to heart disease and 1 is asymptomatic. Let's recode this.
+
+
+```{r}
+hd_new <- hd %>% mutate(target = recode(target, "0" = "1", "1" = "0"))
+```
+
+
+Let's tidy the dataset a bit more.
+
+```{r}
+hd_model <- hd_new %>%
+  filter(
+    thal != 0 & ca != 4 # remove values correspondind to NA in original dataset
+  ) %>%
+# Recode the categorical variables as factors using the dplyr library.
+  mutate(
+    sex = case_when(
+      sex == 0 ~ "female",
+      sex == 1 ~ "male"
+           ),
+    fbs = case_when(
+      fbs == 0 ~ "<=120",
+      fbs == 1 ~ ">120"
+            ),
+    exang = case_when(
+      exang == 0 ~ "no",
+      exang == 1 ~ "yes"
+            ),
+    cp = case_when(
+      cp == 3 ~ "typical angina",
+      cp == 1 ~ "atypical angina",
+      cp == 2 ~ "non-anginal pain",
+      cp == 0 ~ "asymptomatic angina"
+          ),
+    restecg = case_when(
+      restecg == 0 ~ "hypertrophy",
+      restecg == 1 ~ "normal",
+      restecg == 2 ~ "wave abnormality"
+              ),
+    target = case_when(
+      target == 0 ~ "asymptomatic",
+      target == 1 ~ "heart-disease"
+              ),
+    slope = case_when(
+      slope == 2 ~ "upsloping",
+      slope == 1 ~ "flat",
+      slope == 0 ~ "downsloping"
+    ),
+    thal = case_when(
+      thal == 1 ~ "fixed defect",
+      thal == 2 ~ "normal",
+      thal == 3 ~ "reversable defect"
+    ),
+    sex = as.factor(sex),
+    fbs = as.factor(fbs),
+    exang = as.factor(exang),
+    cp = as.factor(cp),
+    slope = as.factor(slope),
+    ca = as.factor(ca),
+    thal = as.factor(thal),
+    restecg = as.factor(restecg),
+    target = as.factor(target)
+  )
+
+```
+
+
+## Training and Test sets
+
+
+```{r}
+hd_model <- na.omit(hd_model)
+
+set.seed(44)
+train.samples <- hd_model$target %>%
+  createDataPartition(p = 0.7, list = FALSE)
+
+train_data <- hd_model[train.samples, ]
+test_data <- hd_model[-train.samples, ]
+```
+
+## Logistic Regression
+
+
+full model
+```{r}
+log_reg <- glm(data = train_data, target ~ ., family = "binomial" )
+summary(log_reg)
+```
+
+
+
+### LASSO
+
+```{r}
+x <- model.matrix(target ~ ., train_data)[,-1]
+y <- ifelse(train_data$target == "heart-disease", 1 , 0)
+```
+
+
+```{r}
+log_lasso <- glmnet(x, y, family = "binomial", alpha = 1, lambda = NULL)
+plot(log_lasso)
+```
+
+
+Let's use misclassification error in 10-fold cross validation
+```{r}
+cv_lasso <- cv.glmnet(x, y, family = "binomial", alpha = 1, lambda = NULL, type.measure = "class")
+plot(cv_lasso)
+```
+
+```{r}
+cv_lasso$lambda.min
+coef(cv_lasso, cv_lasso$lambda.min)
+cv_lasso$lambda.1se
+coef(cv_lasso, cv_lasso$lambda.1se)
+```
+
+```{r}
+cv_lasso_auc <- cv.glmnet(x, y, family = "binomial", alpha = 1, lambda = NULL, type.measure = "auc", keep = TRUE)
+
+rocs_l <- roc.glmnet(cv_lasso_auc$fit.preval, newy = y)
+```
+
+```{r}
+best_l_min <- cv_lasso_auc$index["min",]
+
+plot(rocs_l[[best_l_min]], type = "l")
+invisible(sapply(rocs_l, lines, col="grey"))
+lines(rocs_l[[best_l_min]], lwd = 2,col = "red")
+
+```
+
+
+```{r}
+best_l_1se <- cv_lasso_auc$index["1se",]
+plot(rocs_l[[best_l_1se]], type = "l")
+invisible(sapply(rocs_l, lines, col="grey"))
+lines(rocs_l[[best_l_1se]], lwd = 2,col = "blue")
+```
+
+
+
+```{r}
+lasso_model_min <- glmnet(x, y, alpha = 1, family = "binomial", 
+                      lambda = cv_lasso$lambda.min)
+
+lasso_model_1se <- glmnet(x, y, alpha = 1, family = "binomial", 
+                      lambda = cv_lasso$lambda.1se)
+```
+
+
+```{r}
+test_x <- model.matrix(target ~., test_data)[,-1]
+test_y <- ifelse(test_data$target == "heart-disease", 1 , 0)
+
+
+a_min <- assess.glmnet(lasso_model_min, newx = test_x, newy = test_y, s = "lambda.min")
+a_1se <- assess.glmnet(lasso_model_1se, newx = test_x, newy = test_y, s = "lambda.1se")
+
+do.call(rbind, Map(data.frame, Lasso_min = a_min, Lasso_1se = a_1se))
+```
+
+Let's look at the AUC
+```{r}
+roc_lasso_min_t <- roc.glmnet(lasso_model_min, newx = test_x, newy = test_y)
+plot(roc_lasso_min_t, type = "l")
+```
+
+```{r}
+cnf_min <- confusion.glmnet(lasso_model_min, newx = test_x, newy = test_y)
+print(cnf_min)
+```
+
+```{r}
+# Make prediction on test data
+test_x <- model.matrix(target ~., test_data)[,-1]
+probabilities_min <- lasso_model_min %>% predict(newx = test_x)
+predicted.classes_min <- ifelse(probabilities_min > 0.5, "heart-disease", "asymptomatic")
+
+# Model accuracy rate
+observed.classes <- test_data$target
+mean(predicted.classes_min == observed.classes)
+```
+
+```{r}
+roc_lasso_1se_t <- roc.glmnet(lasso_model_1se, newx = test_x, newy = test_y)
+plot(roc_lasso_1se_t, type = "l")
+```
+
+```{r}
+cnf_1se <- confusion.glmnet(lasso_model_1se, newx = test_x, newy = test_y)
+print(cnf_1se)
+```
+
+
+```{r}
+# Make prediction on test data
+test_x <- model.matrix(target ~., test_data)[,-1]
+probabilities_1se <- lasso_model_1se %>% predict(newx = test_x)
+predicted.classes_1se <- ifelse(probabilities_1se > 0.5, "heart-disease", "asymptomatic")
+
+# Model accuracy rate
+observed.classes <- test_data$target
+mean(predicted.classes_1se == observed.classes)
+```
+
+### Ridge
+
+```{r}
+log_ridge <- glmnet(x, y, family = "binomial", alpha = 0, lambda = NULL)
+plot(log_ridge)
+```
+
+
+ridge model
+```{r}
+cv_ridge <- cv.glmnet(x, y, family = "binomial", alpha = 0, lambda = NULL, type.measure = "class")
+```
+
+```{r}
+coef(cv_ridge, cv_ridge$lambda.min)
+coef(cv_ridge, cv_ridge$lambda.1se)
+```
+
+```{r}
+plot(cv_ridge)
+```
+
+```{r}
+ridge_model <- glmnet(x, y, alpha = 0, family = "binomial", 
+                      lambda = cv_ridge$lambda.min)
+```
+
+
+
+```{r}
+test_x <- model.matrix(target ~., test_data)[,-1]
+test_y <- ifelse(test_data$target == "heart-disease", 1 , 0)
+
+
+assess.glmnet(ridge_model, newx = test_x, newy = test_y, s = "lambda.min")
+
+
+```
+
+```{r}
+cv_ridge_auc <- cv.glmnet(x, y, family = "binomial", alpha = 0, lambda = NULL, type.measure = "auc", keep = TRUE)
+
+rocs_r <- roc.glmnet(cv_ridge_auc$fit.preval, newy = y)
+```
+
+```{r}
+best_r <- cv_ridge_auc$index["min",]
+plot(rocs_r[[best_r]], type = "l")
+invisible(sapply(rocs_r, lines, col="grey"))
+lines(rocs_r[[best_r]], lwd = 2,col = "red")
+```
+
+```{r}
+cnf_r <- confusion.glmnet(ridge_model, newx = test_x, newy = test_y)
+print(cnf_r)
+```
+
+
+
+```{r}
+
+# Make prediction on test data
+test_x <- model.matrix(target ~., test_data)[,-1]
+probabilities_r <- ridge_model %>% predict(newx = test_x)
+predicted.classes_r <- ifelse(probabilities_r > 0.5, "heart-disease", "asymptomatic")
+
+# Model accuracy rate
+observed.classes_r <- test_data$target
+mean(predicted.classes_r == observed.classes_r)
+
+```
+
+
+
+
+
+
